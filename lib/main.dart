@@ -239,7 +239,7 @@ class _PenLoaderState extends State<_PenLoader> with SingleTickerProviderStateMi
     ..cubicTo(26, -34, 52, 16, 78, -10)
     ..cubicTo(104, -36, 130, 13, 156, -13)
     ..cubicTo(182, -36, 208, 10, 234, -10)
-    ..addOval(Rect.fromCircle(center: const Offset(210, -28), radius: 6));
+    ..addOval(Rect.fromCircle(center: const Offset(210, -34), radius: 5));
 
   @override
   void initState() {
@@ -263,6 +263,7 @@ class _PenLoaderState extends State<_PenLoader> with SingleTickerProviderStateMi
   @override
   Widget build(BuildContext context) {
     final p = PaletteScope.of(context);
+    final screenWidth = MediaQuery.of(context).size.width;
     return Center(
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -289,12 +290,19 @@ class _PenLoaderState extends State<_PenLoader> with SingleTickerProviderStateMi
               final t = _ctrl.value;
               final lineT = Curves.easeInOut.transform((t / 0.45).clamp(0.0, 1.0));
               final dotT = Curves.easeInOut.transform(((t - 0.5) / 0.2).clamp(0.0, 1.0));
+              // The remaining 30% of the timeline (after the dot lands at
+              // t=0.7) is spent flicking the pen off across the screen,
+              // rather than extending the total duration — keeps it in
+              // sync with the minimum-display timer in _AppEntryState.
+              final floatT = Curves.easeIn.transform(((t - 0.7) / 0.3).clamp(0.0, 1.0));
               return CustomPaint(
                 size: const Size(234, 56),
                 painter: _PenPainter(
                   metrics: _metrics,
                   segmentProgress: [lineT, dotT],
                   strokeColor: p.gold,
+                  floatT: floatT,
+                  floatDistance: screenWidth,
                 ),
               );
             },
@@ -309,11 +317,15 @@ class _PenPainter extends CustomPainter {
   final List<PathMetric> metrics;
   final List<double> segmentProgress; // one entry per metric, each 0..1
   final Color strokeColor;
+  final double floatT; // 0..1, drives the pen flying off after the dot lands
+  final double floatDistance; // screen width, sets how far it travels
 
   _PenPainter({
     required this.metrics,
     required this.segmentProgress,
     required this.strokeColor,
+    this.floatT = 0,
+    this.floatDistance = 0,
   });
 
   // Calligraphy pen silhouette in local space: broad flat nib pointed at the
@@ -367,17 +379,22 @@ class _PenPainter extends CustomPainter {
       tangent = m.getTangentForOffset(len);
     }
 
-    if (tangent != null) {
+    if (tangent != null && floatT < 1.0) {
+      // Flick the pen up and off to the right across the screen once the
+      // dot is done, fading and tumbling as it goes; the drawn stroke
+      // itself is untouched and stays put.
+      final flyOffset = Offset(floatT * floatDistance, -floatT * floatDistance * 0.4);
+      final penOpacity = 1.0 - floatT;
       canvas.save();
-      canvas.translate(tangent.position.dx, tangent.position.dy);
-      canvas.rotate(-0.4); // fixed natural writing tilt, doesn't follow the curve's slope
-      canvas.drawPath(_holder, Paint()..color = Colors.black);
-      canvas.drawPath(_ferrule, Paint()..color = strokeColor.withOpacity(0.7));
-      canvas.drawPath(_nib, Paint()..color = strokeColor);
+      canvas.translate(tangent.position.dx + flyOffset.dx, tangent.position.dy + flyOffset.dy);
+      canvas.rotate(-0.4 - floatT * 1.3); // base writing tilt plus tumble as it flies off
+      canvas.drawPath(_holder, Paint()..color = Colors.black.withOpacity(penOpacity));
+      canvas.drawPath(_ferrule, Paint()..color = strokeColor.withOpacity(0.7 * penOpacity));
+      canvas.drawPath(_nib, Paint()..color = strokeColor.withOpacity(penOpacity));
       canvas.drawPath(
         _nibSlit,
         Paint()
-          ..color = Colors.black.withOpacity(0.35)
+          ..color = Colors.black.withOpacity(0.35 * penOpacity)
           ..style = PaintingStyle.stroke
           ..strokeWidth = 0.8,
       );
